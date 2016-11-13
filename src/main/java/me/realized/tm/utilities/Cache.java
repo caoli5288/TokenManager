@@ -26,6 +26,10 @@ public class Cache<T> {
         return get(false);
     }
 
+    public T watch() {
+        return obj;
+    }
+
     public T get(boolean force) {
         if (force || hasOutdated()) {
             obj = fetcher.get();

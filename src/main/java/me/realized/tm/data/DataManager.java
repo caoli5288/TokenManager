@@ -5,6 +5,7 @@ import com.mengcraft.simpleorm.DatabaseException;
 import com.mengcraft.simpleorm.EbeanHandler;
 import me.realized.tm.Core;
 import me.realized.tm.events.TokenReceiveEvent;
+import me.realized.tm.utilities.Cache;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -21,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -30,6 +30,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 public class DataManager implements Listener {
 
@@ -43,12 +44,10 @@ public class DataManager implements Listener {
 
     private boolean connected;
 
-    private final List<String> top = new ArrayList<>();
-    private long lastUpdate;
-
     private List<BukkitTask> tasks = new ArrayList<>();
-    private EbeanServer server;
 
+    private Cache<List<String>> top;
+    private EbeanServer server;
     private ExecutorService pool;
 
     public DataManager(Core instance) {
@@ -154,7 +153,17 @@ public class DataManager implements Listener {
     }
 
     private void loadTopBalance() {
+        top = new Cache<>(() -> {
+            List<Token> list = server.find(Token.class)
+                    .setMaxRows(20)
+                    .orderBy("amount desc")
+                    .findList();
+            return list.stream().map(token -> select(token.getName(), token.getId().toString())).collect(Collectors.toList());
+        }, Math.max(300000, instance.getConfig().getInt("update-balance-top") * 60000));
+    }
 
+    private <T> T select(T i, T j) {
+        return nil(i) ? j : i;
     }
 
     public void checkOnline() {
@@ -318,7 +327,10 @@ public class DataManager implements Listener {
     }
 
     public List<String> getTopBalances() {
-        return top;
+        if (top.hasOutdated()) {
+            pool.execute(top::get);
+        }
+        return top.watch();
     }
 
     @EventHandler

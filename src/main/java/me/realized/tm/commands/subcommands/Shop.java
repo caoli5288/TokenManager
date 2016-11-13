@@ -18,8 +18,8 @@ public class Shop extends SubCommand {
 
         Player player = (Player) sender;
 
-        if ((boolean) getConfig().getValue("use-default.enabled")) {
-            String name = (String) getConfig().getValue("use-default.shop");
+        if (getInstance().getConfig().getBoolean("use-default.enabled")) {
+            String name = getInstance().getConfig().getString("use-default.shop");
 
             if (!getShopManager().isShop(name)) {
                 pm(player, getLang().getString("invalid-shop").replace("%input%", name));

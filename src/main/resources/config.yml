@@ -29,11 +29,6 @@ mysql:
   password: 'password'
   database: 'yourdatabase'
 
-  # Best to not touch the options below if you don't know what you're doing.
-  maxPoolSize: 20
-  idleTimeOut: 30000
-  connectionTimeOut: 10000
-
 # If enabled, when the command '/token shop' is executed, it will open the shop selected below to player
 # instead of displaying the usage or opening the selected shop.
 use-default:

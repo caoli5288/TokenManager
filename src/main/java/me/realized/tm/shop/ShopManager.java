@@ -1,7 +1,6 @@
 package me.realized.tm.shop;
 
 import me.realized.tm.Core;
-import me.realized.tm.configuration.Config;
 import me.realized.tm.configuration.Lang;
 import me.realized.tm.data.Action;
 import me.realized.tm.data.DataManager;
@@ -27,7 +26,7 @@ import java.util.*;
 public class ShopManager implements Listener {
 
     private final Core instance;
-    private final Config config;
+    private final FileConfiguration config;
     private final Lang lang;
     private final DataManager manager;
     private final List<Shop> shops = new ArrayList<>();
@@ -35,7 +34,7 @@ public class ShopManager implements Listener {
 
     public ShopManager(Core instance) {
         this.instance = instance;
-        this.config = instance.getConfiguration();
+        this.config = instance.getConfig();
         this.lang = instance.getLang();
         this.manager = instance.getDataManager();
         Bukkit.getPluginManager().registerEvents(this, instance);
@@ -243,7 +242,7 @@ public class ShopManager implements Listener {
             return;
         }
 
-        int delay = (int) config.getValue("click-delay");
+        int delay = (int) config.getInt("click-delay");
         long now = System.currentTimeMillis();
 
         if (delay > 0 && clicks.get(player.getUniqueId()) != null) {

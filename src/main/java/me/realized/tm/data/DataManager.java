@@ -1,13 +1,10 @@
 package me.realized.tm.data;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.pool.HikariPool;
+import com.avaje.ebean.EbeanServer;
+import com.mengcraft.simpleorm.DatabaseException;
+import com.mengcraft.simpleorm.EbeanHandler;
 import me.realized.tm.Core;
-import me.realized.tm.configuration.Config;
 import me.realized.tm.events.TokenReceiveEvent;
-import me.realized.tm.utilities.StringUtil;
-import me.realized.tm.utilities.profile.ProfileUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -17,37 +14,47 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.scheduler.BukkitTask;
 
+import javax.persistence.PersistenceException;
 import java.io.File;
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class DataManager implements Listener {
 
     private final Core instance;
-    private final Config config;
+    private final FileConfiguration config;
     private final boolean sql;
 
     private File file;
     private FileConfiguration dataConfig;
     private Map<UUID, Integer> data = new ConcurrentHashMap<>();
 
-    private HikariDataSource dataSource;
     private boolean connected;
 
     private final List<String> top = new ArrayList<>();
     private long lastUpdate;
 
     private List<BukkitTask> tasks = new ArrayList<>();
+    private EbeanServer server;
+
+    private ExecutorService pool;
 
     public DataManager(Core instance) {
         this.instance = instance;
-        this.config = instance.getConfiguration();
-        this.sql = config.isSQLEnabled();
+        this.config = instance.getConfig();
+        this.sql = config.getBoolean("mysql.enabled");
         Bukkit.getPluginManager().registerEvents(this, instance);
     }
 
@@ -55,6 +62,10 @@ public class DataManager implements Listener {
         instance.info("Data Storage: " + (sql ? "MySQL" : "Flatfile"));
 
         if (sql) {
+            pool = (new ThreadPoolExecutor(1, 1,
+                    0L, TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<Runnable>()));
+
             boolean success = connect();
 
             if (success) {
@@ -95,200 +106,76 @@ public class DataManager implements Listener {
     }
 
     private boolean connect() {
-        String host = (String) config.getValue("mysql.hostname");
-        String port = (String) config.getValue("mysql.port");
-        String database = (String) config.getValue("mysql.database");
-        String user = (String) config.getValue("mysql.username");
-        String password = (String) config.getValue("mysql.password");
-        int maxPoolSize = (int) config.getValue("mysql.maxPoolSize");
-        int idleTimeOut = (int) config.getValue("mysql.idleTimeOut");
-        int connectionTimeOut = (int) config.getValue("mysql.connectionTimeOut");
+        String host = config.getString("mysql.hostname");
+        String port = config.getString("mysql.port");
+        String database = config.getString("mysql.database");
+        String user = config.getString("mysql.username");
+        String password = config.getString("mysql.password");
         instance.info("Loaded credentials for SQL database.");
 
-        HikariConfig hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database);
-        hikariConfig.setDriverClassName("com.mysql.jdbc.Driver");
-        hikariConfig.setUsername(user);
-        hikariConfig.setPassword(password);
-        hikariConfig.setMaximumPoolSize(maxPoolSize);
-        hikariConfig.setIdleTimeout(idleTimeOut);
-        hikariConfig.setConnectionTimeout(connectionTimeOut);
+        EbeanHandler handler = new EbeanHandler(instance);
+        handler.setUrl("jdbc:mysql://" + host + ":" + port + "/" + database);
+        handler.setDriver("com.mysql.jdbc.Driver");
+        handler.setUserName(user);
+        handler.setPassword(password);
 
+        handler.define(Token.class);
         try {
-            dataSource = new HikariDataSource(hikariConfig);
-            validateConnection(true);
+            handler.initialize();
 
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-                statement.execute(Action.TABLE.query());
-            }
-
-            return true;
-        } catch (HikariPool.PoolInitializationException | SQLException e) {
-            validateConnection(false);
-            instance.warn("Error caught while connecting to the database! (" + e.getMessage() + ")");
-            return false;
+            server = handler.getServer();
+            connected = true;
+        } catch (DatabaseException e) {
+            e.printStackTrace();
         }
+
+        return connected;
     }
 
     public void close() {
         Bukkit.getScheduler().cancelTasks(instance);
-
-        if (sql) {
-            if (dataSource != null && !dataSource.isClosed()) {
-                dataSource.close();
+        if (!nil(pool)) {
+            pool.shutdown();
+            try {
+                pool.awaitTermination(1, TimeUnit.MINUTES);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
-        } else {
-            saveLocalData();
         }
     }
 
-    public void reloadableMethods() {
+    public void reload() {
         for (BukkitTask task : tasks) {
             task.cancel();
         }
 
-        loadTopBalances();
-        initializeAutoSave();
+        loadTopBalance();
+        initLocalSaver();
     }
 
-    private void loadTopBalances() {
-        if (sql && !connected) {
-            return;
-        }
+    private void loadTopBalance() {
 
-        tasks.add(Bukkit.getScheduler().runTaskTimerAsynchronously(instance, new Runnable() {
-            @Override
-            public void run() {
-                long now = System.currentTimeMillis();
-
-                if (now - (lastUpdate != 0L ? lastUpdate : now) < 900000) {
-                    top.clear();
-
-                    List<String> data = getData(sql);
-
-                    if (data.isEmpty()) {
-                        top.add("&cNo data found.");
-                        lastUpdate = now;
-                        return;
-                    }
-
-                    Collections.sort(data, new Comparator<String>() {
-                        @Override
-                        public int compare(String s1, String s2) {
-                            return Long.valueOf(s2.split(":")[1]).compareTo(Long.valueOf(s1.split(":")[1]));
-                        }
-                    });
-
-                    List<UUID> uuids = new ArrayList<>();
-                    List<String> extra = new ArrayList<>();
-
-                    for (int i = 0; i < 10; i++) {
-                        if (i < 0 || i >= data.size()) {
-                            break;
-                        }
-
-                        String[] split = data.get(i).split(":");
-                        uuids.add(UUID.fromString(split[0]));
-                        extra.add(String.valueOf(i + 1) + ":" + split[1]);
-                    }
-
-                    List<String> names = ProfileUtil.getNames(uuids, sql);
-
-                    for (int i = 0; i < names.size(); i++) {
-                        top.add(extra.get(i) + ":" + names.get(i));
-                    }
-
-                    lastUpdate = System.currentTimeMillis();
-                }
-            }
-        }, 0L, 20L * 60L * (int) config.getValue("update-balance-top")));
     }
 
-    public void checkOnlinePlayers() {
+    public void checkOnline() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             executeAction(Action.CREATE, player.getUniqueId(), 0);
         }
     }
 
-    private void initializeAutoSave() {
-        if (sql) {
-            return;
+    private void initLocalSaver() {
+        if (!sql) {
+            tasks.add(Bukkit.getScheduler().runTaskTimerAsynchronously(instance, new Runnable() {
+                @Override
+                public void run() {
+                    instance.info("Auto-saving...");
+                    saveLocalData();
+                }
+            }, 0L, 20L * 60L * config.getInt("auto-save")));
         }
-
-        tasks.add(Bukkit.getScheduler().runTaskTimerAsynchronously(instance, new Runnable() {
-            @Override
-            public void run() {
-                instance.info("Auto-saving...");
-                saveLocalData();
-            }
-        }, 0L, 20L * 60L * (int) config.getValue("auto-save")));
     }
 
     public void checkConnection() {
-        if (!sql) {
-            return;
-        }
-
-        Bukkit.getScheduler().runTaskTimerAsynchronously(instance, new Runnable() {
-            @Override
-            public void run() {
-                if (connected) {
-                    return;
-                }
-
-                instance.info("Attempting to reconnect to the database...");
-                boolean success = connect();
-
-                if (success) {
-                    instance.info("Successfully connected to the database.");
-                } else {
-                    instance.warn("Connection failed.");
-                }
-            }
-        }, 0L, 20L * 60L * 3);
-    }
-
-    private List<String> getData(boolean sql) {
-        if (sql) {
-            ExecutorService executor = Executors.newFixedThreadPool(1);
-            Future<List<String>> future = executor.submit(new Callable<List<String>>() {
-                @Override
-                public List<String> call() throws Exception {
-                    List<String> result = new ArrayList<>();
-
-                    try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement(); ResultSet results = statement.executeQuery(Action.TOP.query())) {
-                        while (results.next()) {
-                            result.add(results.getString("uuid") + ":" + results.getLong("tokens"));
-                        }
-
-                    } catch (SQLException e) {
-                        validateConnection(false);
-                        instance.warn("SQL error caught while executing SQL query! (" + e.getMessage() + ")");
-                    }
-
-                    return result;
-                }
-            });
-
-            executor.shutdown();
-
-            try {
-                return future.get(5, TimeUnit.SECONDS);
-            } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                return new ArrayList<>();
-            }
-
-        } else {
-            List<String> result = new ArrayList<>();
-
-            if (!data.isEmpty()) {
-                for (Map.Entry<UUID, Integer> entry : data.entrySet()) {
-                    result.add(entry.getKey() + ":" + entry.getValue());
-                }
-            }
-
-            return result;
-        }
     }
 
     private boolean saveLocalData() {
@@ -316,94 +203,74 @@ public class DataManager implements Listener {
         return connected;
     }
 
-    private void validateConnection(boolean connected) {
-        this.connected = connected;
+    private Token newToken(UUID id) {
+        Token token = server.createEntityBean(Token.class);
+        token.setId(id);
+        token.setName(instance.getServer().getPlayer(id).getName());
+        token.setAmount(config.getInt("default-balance"));
+        return token;
     }
 
     private boolean create(UUID uuid) {
+        if (sql) return true;
+        if (data.get(uuid) == null) {
+            data.put(uuid, config.getInt("default-balance"));
+            return true;
+        }
+        return true;
+    }
+
+    private int balance(UUID id) {
         if (sql) {
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(Action.GET.query("{0}", uuid))) {
-                if (result.isBeforeFirst()) {
-                    return false;
-                }
-
-                statement.execute(Action.CREATE.query("{0}", uuid, "{1}", config.getValue("default-balance")));
-                return true;
-            } catch (SQLException e) {
-                validateConnection(false);
-                instance.warn("SQL error caught while executing SQL query! (" + e.getMessage() + ")");
-                return false;
-            }
+            Token token = server.find(Token.class, id);
+            if (token == null) return 0;
+            return token.getAmount();
         } else {
-            if (data.get(uuid) != null) {
-                return false;
+            if (!data.containsKey(id)) {
+                create(id);
             }
+            return data.get(id);
+        }
+    }
 
-            data.put(uuid, ((int) config.getValue("default-balance")));
+    private boolean nil(Object i) {
+        return i == null;
+    }
+
+    private boolean set(UUID id, int amount) {
+        if (sql) {
+            Token token = server.find(Token.class, id);
+            if (nil(token)) {
+                token = newToken(id);
+            }
+            token.setAmount(amount);
+            server.save(token);
+            return true;
+        } else {
+            data.put(id, amount);
             return true;
         }
     }
 
-    private int balance(UUID uuid) {
+    private boolean add(UUID id, int amount) {
         if (sql) {
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(Action.GET.query("{0}", uuid))) {
-                if (!result.isBeforeFirst()) {
-                    return 0;
-                }
-
-                int balance = 0;
-
-                while (result.next()) {
-                    balance = (int) result.getLong("tokens");
-                }
-
-                return balance;
-            } catch (SQLException e) {
-                validateConnection(false);
-                instance.warn("SQL error caught while executing SQL query! (" + e.getMessage() + ")");
-                return 0;
+            Token token = server.find(Token.class, id);
+            if (nil(token)) {
+                token = newToken(id);
             }
-        } else {
-            return data.get(uuid) != null ? data.get(uuid) : 0;
-        }
-    }
-
-    private boolean exists(UUID uuid) {
-        if (sql) {
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(Action.GET.query("{0}", uuid))) {
-                return result.isBeforeFirst();
-            } catch (SQLException e) {
-                validateConnection(false);
-                instance.warn("SQL error caught while executing SQL query! (" + e.getMessage() + ")");
+            token.setAmount(token.getAmount() + amount);
+            try {
+                server.save(token);
+            } catch (PersistenceException e) {
                 return false;
             }
-        } else {
-            return data.get(uuid) != null;
-        }
-    }
-
-    private boolean set(UUID uuid, int amount) {
-        if (sql) {
-            try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-                statement.execute(Action.SET.query("{0}", uuid, "{1}", amount));
-                return true;
-            } catch (SQLException e) {
-                validateConnection(false);
-                instance.warn("SQL error caught while executing SQL query! (" + e.getMessage() + ")");
-                return false;
-            }
-        } else {
-            data.put(uuid, amount);
             return true;
         }
+        return set(id, balance(id) + amount);
     }
 
-    private boolean add(UUID uuid, int amount) {
-        return set(uuid, balance(uuid) + amount);
-    }
-
-    private boolean remove(UUID uuid, int amount) {
-        return set(uuid, Math.abs(balance(uuid) - amount));
+    private boolean remove(UUID id, int amount) {
+        return set(id, Math.max(0, balance(id) - amount));
     }
 
     private Object callByAction(final Action action, final UUID target, final int amount) {
@@ -412,8 +279,6 @@ public class DataManager implements Listener {
                 return create(target);
             case BALANCE:
                 return balance(target);
-            case EXISTS:
-                return exists(target);
             case SET:
                 return set(target, amount);
             case ADD:
@@ -439,15 +304,7 @@ public class DataManager implements Listener {
 
         if (sql) {
             final int actualAmount = amount;
-            ExecutorService executor = Executors.newFixedThreadPool(1);
-            Future<Object> future = executor.submit(new Callable<Object>() {
-                @Override
-                public Object call() throws Exception {
-                    return callByAction(action, target, actualAmount);
-                }
-            });
-
-            executor.shutdown();
+            Future<Object> future = pool.submit(() -> callByAction(action, target, actualAmount));
 
             try {
                 return future.get(3, TimeUnit.SECONDS);
@@ -464,12 +321,9 @@ public class DataManager implements Listener {
         return top;
     }
 
-    public String getNextUpdate() {
-        return StringUtil.format((lastUpdate + 1000L * 60L * (int) config.getValue("update-balance-top") - System.currentTimeMillis()) / 1000);
-    }
-
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         executeAction(Action.CREATE, event.getPlayer().getUniqueId(), 0);
     }
+
 }

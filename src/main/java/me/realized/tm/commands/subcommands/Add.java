@@ -12,14 +12,14 @@ import java.util.UUID;
 public class Add extends SubCommand {
 
     public Add() {
-        super(new String[] {"add", "give"}, "add <username> <amount>", "admin", 3);
+        super(new String[]{"add", "give"}, "add <username> <amount>", "admin", 3);
     }
 
     @Override
     public void run(CommandSender sender, String label, String[] args) {
         UUID target = ProfileUtil.getUniqueId(args[1]);
 
-        if (target == null || !((boolean) getDataManager().executeAction(Action.EXISTS, target, 0))) {
+        if (target == null) {
             pm(sender, getLang().getString("invalid-player").replace("%input%", args[1]));
             return;
         }

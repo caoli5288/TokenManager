@@ -11,8 +11,7 @@ public class Reload extends SubCommand {
     @Override
     public void run(CommandSender sender, String label, String[] args) {
         getShopManager().close();
-        getConfig().load();
-        getDataManager().reloadableMethods();
+        getDataManager().reload();
         getLang().load();
         getShopManager().load();
         pm(sender, "&a" + getInstance().getDescription().getFullName() + "&9: Reload complete.");

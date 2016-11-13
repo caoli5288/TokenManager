@@ -1,13 +1,10 @@
 package me.realized.tm;
 
-import be.maximvdw.placeholderapi.PlaceholderAPI;
 import me.realized.tm.commands.TMCommand;
 import me.realized.tm.commands.TokenCommand;
-import me.realized.tm.configuration.Config;
 import me.realized.tm.configuration.Lang;
 import me.realized.tm.data.DataManager;
-import me.realized.tm.hooks.Economy_TM;
-import me.realized.tm.hooks.PlaceholderReplacer_TM;
+import me.realized.tm.hooks.TMEconomy;
 import me.realized.tm.shop.ShopManager;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -22,7 +19,6 @@ public class Core extends JavaPlugin {
     private static Core instance = null;
     private static final Logger logger = Logger.getLogger("TokenManager");
 
-    private Config config;
     private Lang lang;
     private DataManager dataManager;
     private ShopManager shopManager;
@@ -30,9 +26,6 @@ public class Core extends JavaPlugin {
     @Override
     public void onEnable() {
         instance = this;
-
-        config = new Config(this);
-        config.load();
 
         lang = new Lang(this);
         lang.load();
@@ -45,9 +38,9 @@ public class Core extends JavaPlugin {
             return;
         }
 
-        dataManager.checkOnlinePlayers();
+        dataManager.checkOnline();
         dataManager.checkConnection();
-        dataManager.reloadableMethods();
+        dataManager.reload();
 
         shopManager = new ShopManager(this);
         shopManager.load();
@@ -57,17 +50,13 @@ public class Core extends JavaPlugin {
 
         PluginManager manager = Bukkit.getPluginManager();
 
-        if (manager.isPluginEnabled("MVdWPlaceholderAPI")) {
-            PlaceholderAPI.registerPlaceholder(this, "tm_tokens", new PlaceholderReplacer_TM(this));
-        }
-
-        if ((boolean) config.getValue("vault-hook")) {
+        if (getConfig().getBoolean("vault-hook")) {
             if (!manager.isPluginEnabled("Vault")) {
                 warn("Vault Hook was enabled in the config, but Vault was not found on the server! Hook failed.");
                 return;
             }
 
-            Bukkit.getServicesManager().register(Economy.class, new Economy_TM(this), this, ServicePriority.Highest);
+            Bukkit.getServicesManager().register(Economy.class, new TMEconomy(this), this, ServicePriority.Highest);
             info("Successfully hooked into Vault.");
         }
     }
@@ -87,10 +76,6 @@ public class Core extends JavaPlugin {
 
     public void info(String msg) {
         logger.info("[TokenManager] " + msg);
-    }
-
-    public Config getConfiguration() {
-        return config;
     }
 
     public Lang getLang() {

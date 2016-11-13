@@ -1,7 +1,6 @@
 package me.realized.tm.commands.subcommands;
 
 import me.realized.tm.Core;
-import me.realized.tm.configuration.Config;
 import me.realized.tm.configuration.Lang;
 import me.realized.tm.data.DataManager;
 import me.realized.tm.shop.ShopManager;
@@ -38,10 +37,6 @@ public abstract class SubCommand {
 
     public int getMinLength() {
         return minLength;
-    }
-
-    Config getConfig() {
-        return instance.getConfiguration();
     }
 
     Lang getLang() {

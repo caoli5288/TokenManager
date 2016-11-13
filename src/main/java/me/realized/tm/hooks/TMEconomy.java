@@ -11,11 +11,11 @@ import org.bukkit.entity.Player;
 
 import java.util.List;
 
-public class Economy_TM implements Economy {
+public class TMEconomy implements Economy {
 
     private final DataManager manager;
 
-    public Economy_TM(Core instance) {
+    public TMEconomy(Core instance) {
         this.manager = instance.getDataManager();
     }
 
@@ -62,7 +62,7 @@ public class Economy_TM implements Economy {
 
     @Override
     public boolean hasAccount(OfflinePlayer player) {
-        return (boolean) manager.executeAction(Action.EXISTS, player.getUniqueId(), 0);
+        return true;
     }
 
     @Override

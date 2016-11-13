@@ -13,7 +13,7 @@ import java.util.UUID;
 public class Send extends SubCommand {
 
     public Send() {
-        super(new String[] {"send"}, "send <username> <amount>", "use.send", 3);
+        super(new String[]{"send"}, "send <username> <amount>", "use.send", 3);
     }
 
     @Override
@@ -26,7 +26,7 @@ public class Send extends SubCommand {
         Player player = (Player) sender;
         UUID target = ProfileUtil.getUniqueId(args[1]);
 
-        if (target == null || !((boolean) getDataManager().executeAction(Action.EXISTS, target, 0))) {
+        if (target == null) {
             pm(sender, getLang().getString("invalid-player").replace("%input%", args[1]));
             return;
         }

@@ -7,12 +7,12 @@ import java.util.List;
 public class Top extends SubCommand {
 
     public Top() {
-        super(new String[] {"top"}, "top", "use.top", 1);
+        super(new String[]{"top"}, "top", "use.top", 1);
     }
 
     @Override
     public void run(CommandSender sender, String label, String[] args) {
-        pm(sender, getLang().getString("top-next-update").replace("%remaining%", getDataManager().getNextUpdate()));
+        pm(sender, getLang().getString("top-next-update").replace("%remaining%", "-1"));
 
         List<String> top = getDataManager().getTopBalances();
 
